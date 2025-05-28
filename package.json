@@ -32,6 +32,7 @@
   },
   "dependencies": {
     "object-sizeof": "^2.6.5",
+    "ts-jest": "^29.3.4",
     "ytil": "workspace:^"
   },
   "packageManager": "pnpm@9.9.0"

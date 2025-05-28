@@ -1,5 +1,13 @@
-
 export interface MemCacheOptions<K, V> {
+  /**
+   * The maximum size of the cache in bytes. If the cache exceeds this size, it will prune itself.
+   * If not set, the cache will not have a size limit.
+   * 
+   * Specify either a number of bytes, or a string with a unit (e.g. "1MB", "512kB", "2GB"). Note that
+   * this uses the strict mode of units, so 1kB is 1000 bytes and 1kiB is 1024 bytes.
+   */
+  capacity?: number | string
+
   /**
    * Initial values to insert into the cache.
    */
