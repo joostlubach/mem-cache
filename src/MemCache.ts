@@ -1,7 +1,7 @@
 import sizeof from 'object-sizeof'
 import { byteSize, Primitive } from 'ytil'
 
-import { MemCacheOptions } from './types'
+import { MemCacheOptions, PrefixOf } from './types'
 
 /**
  * A memory cache storage with nested keys with auto-pruning capabilities.
@@ -11,7 +11,7 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
   constructor(
     private options: MemCacheOptions<K, V> = {},
   ) {
-    this.capacity = options.capacity == null ? null : byteSize(options.capacity)
+    this.capacity = options.capacity == null ? null : byteSize(options.capacity, true)
     this.insertMany(options.values ?? [])
   }
 
@@ -22,12 +22,9 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
     false
   ]
 
-  private capacity: number | null
+  public get size() { return this.root[2] }
+  public readonly capacity: number | null
   
-  private _size: number = 0
-  public get size() {
-    return this._size
-  }
 
   private lastPruneAt: Date = new Date()
 
@@ -38,9 +35,15 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
   }
 
   public sizeof(key: K | PrefixOf<K>) {
-    const node = this.getNode(this.root, key)
+    const node = this.getNode(this.root, key as Primitive[])
     if (node == null) { return null }
     return node[2]
+  }
+
+  public atime(key: K | PrefixOf<K>) {
+    const node = this.getNode(this.root, key as Primitive[])
+    if (node == null) { return null }
+    return node[1]
   }
 
   private getImpl(node: Node<Primitive, V>, key: Primitive[], updateAccessTime: boolean): V | null {
@@ -76,45 +79,58 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
 
   // #region Insertion
 
-  public insertOne(key: K, value: V, upsert: boolean = false) {
-    const size = this.insertImpl(this.root, key, value, upsert)
-    this._size += size
-
-    // this.prune()
-    return size
+  public insertOne(key: K, value: V, replace: false): number | null
+  public insertOne(key: K, value: V, replace?: true): number
+  public insertOne(key: K, value: V, replace: boolean = true): number | null {
+    try {
+      const [size] = this.insertImpl(this.root, key, value, new Date(), replace)
+      return size
+    } finally {
+      if (this.shouldAutoPrune()) {
+        this.prune()
+      }
+    }
   }
 
-  public insertMany(values: Map<K, V> | Array<[K, V]>, upsert: boolean = false) {
+  public insertMany(values: Map<K, V> | Array<[K, V]>, replace: boolean = true): number {
     let totalSize = 0
     for (const [key, value] of values) {
-      totalSize += this.insertOne(key, value, upsert) ?? 0
+      const [size, diff] = this.insertImpl(this.root, key, value, new Date(), replace)
+      totalSize += (size ?? 0)
+    }
+
+    if (this.shouldAutoPrune()) {
+      this.prune()
     }
     return totalSize
   }
 
-  private insertImpl(branch: Branch<Primitive, V>, key: Primitive[], value: V, upsert: boolean): number {
-    if (key.length === 0) { return 0 }
+  private insertImpl(branch: Branch<Primitive, V>, key: Primitive[], value: V, date: Date, replace: boolean): [number | null, number] {
+    if (key.length === 0) { return [null, 0] }
 
     const [head, ...tail] = key
     if (tail.length === 0) {
-      if (!upsert && branch[0].has(head)) { return 0 }
+      const existing = branch[0].get(head) as Leaf<V> | undefined
+      if (!replace && existing != null) { return [null, 0] }
 
       const size = sizeof(value)
-      branch[0].set(head, [value, new Date(), size, true])
-      branch[2] += size
-      return size
+      const diff = size - (existing?.[2] ?? 0)
+      branch[0].set(head, [value, date, size, true])
+      branch[1] = date
+      branch[2] += diff
+      return [size, diff]
     }
 
     let child = branch[0].get(head) as Branch<Primitive, V> | undefined
     if (child == null) {
-      child = [new Map(), new Date(), 0, false]
+      child = [new Map(), date, 0, false]
       branch[0].set(head, child)
     }
 
-    const size = this.insertImpl(child, tail, value, upsert)
-    branch[1] = new Date()
-    branch[2] += size
-    return size
+    const [size, diff] = this.insertImpl(child, tail, value, date, replace)
+    branch[1] = date
+    branch[2] += diff
+    return [size, diff]
   }
 
   // #endregion
@@ -124,11 +140,8 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
   /**
    * Deletes a single entry from the cache and returns the value and its size.
    */
-  public deleteOne(key: K): [V, number] | null {
-    const deleted = this.deleteImpl(this.root, key)
-    if (deleted == null) { return null }
-
-    return [deleted[0], deleted[2]]
+  public deleteOne(key: K | PrefixOf<K>) {
+    this.deleteImpl(this.root, key as Primitive[])
   }
 
   /**
@@ -138,7 +151,7 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
     return keys.map(it => this.deleteOne(it))
   }
 
-  private deleteImpl(branch: Branch<Primitive, V>, key: Primitive[]): Leaf<V> | null {
+  private deleteImpl(branch: Branch<Primitive, V>, key: Primitive[]): Node<K[0], V> | null {
     if (key.length === 0) { return null }
     
     const [head, ...tail] = key
@@ -168,32 +181,53 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
     this.root[2] = 0
   }
 
-  // public prune() {
-  //   if (!this.shouldPrune()) { return }
+  public prune() {
+    this.lastPruneAt = new Date()
+    
+    if (this.capacity == null) { return }
+    if (this.size <= this.capacity) { return }
 
-  //   const entries = Array.from(this.storage.entries())
-  //     .sort((a, b) => a[1][1].getTime() - b[1][1].getTime())
+    const {pruneDepth = Infinity} = this.options
 
-  //   const pruneKeys: K[] = []
+    // Derive a flat list of keys / key prefixes with their access time.
+    const flattened: Array<[K | PrefixOf<K>, V, Date, number]> = []
+    const flatten = (node: Node<Primitive, V>, prefix: Primitive[]): void => {
+      if (prefix.length >= pruneDepth || node[3]) {
+        const leaf = node as Leaf<V>
+        flattened.push([prefix as K | PrefixOf<K>, leaf[0], leaf[1], leaf[2]])
+      } else if (!node[3]) {
+        for (const child of node[0]) {
+          flatten(child[1], [...prefix, child[0]])
+        }
+      }
+    }
+    flatten(this.root, [])
 
-  //   let totalSize = 0
-  //   for (const [key, entry] of entries) {
-  //     if (totalSize <= this.capacity) {
-  //       totalSize += entry[2]
-  //     } else {
-  //       pruneKeys.push(key)
-  //     }
-  //   }
-  //   this.lastPruneAt = new Date()
-  //   return this.deleteMany(pruneKeys)
-  // }
+    // Sort the access times by the least recent first.
+    flattened.sort((a, b) => a[2].getTime() - b[2].getTime())
 
-  private shouldPrune() {
-    const {minPruneInterval} = this.options
-    if (minPruneInterval == null) { return true }
+    const pruned: Array<[K | PrefixOf<K>, V, number]> = []
+
+    // Prune entries until the size is below capacity.
+    for (const [key, value, , size] of flattened) {
+      if (this.size <= this.capacity) { break }
+
+      this.deleteImpl(this.root, key as Primitive[])
+      if (this.options.pruned) {
+        pruned.push([key, value, size])
+      }
+    }
+    this.options.pruned?.(pruned)
+  }
+
+  private shouldAutoPrune() {
+    const {autoPrune = true, autoPruneInterval} = this.options
+    if (!autoPrune) { return false }
+    if (this.capacity == null || this.size <= this.capacity) { return false }
+    if (autoPruneInterval == null) { return true }
 
     const now = new Date()
-    return now.getTime() - this.lastPruneAt.getTime() > minPruneInterval
+    return now.getTime() - this.lastPruneAt.getTime() >= autoPruneInterval
   }
 
   // #endregion
@@ -245,4 +279,3 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
 type Node<K extends Primitive, V> = Branch<K, V> | Leaf<V>
 type Branch<K extends Primitive, V> = [map: Map<K, Node<Primitive, V>>, atime: Date, size: number, leaf: false]
 type Leaf<V> = [value: V, atime: Date, size: number, leaf: true]
-type PrefixOf<K extends Primitive[]> = K extends [...infer Head extends Primitive[], any] ? Head | PrefixOf<Head> : never

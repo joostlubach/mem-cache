@@ -1,4 +1,6 @@
-export interface MemCacheOptions<K, V> {
+import { Primitive } from 'ytil'
+
+export interface MemCacheOptions<K extends [Primitive, ...Primitive[]], V> {
   /**
    * The maximum size of the cache in bytes. If the cache exceeds this size, it will prune itself.
    * If not set, the cache will not have a size limit.
@@ -14,12 +16,29 @@ export interface MemCacheOptions<K, V> {
   values?: Map<K, V> | Array<[K, V]>
 
   /**
-   * The cache prunes itself after every insertion. Use this value to "debounce" the pruning, i.e. prevent
-   * pruning on every insertion. Note that MemCache is always synchronous, so it's not an actual debounce –
-   * if `.insertOne() / .insertMany()` is called before the debounce time is over, pruning will only
-   * happen at the next insertion.
+   * Whether to prune itself after every insertion.
    */
-  minPruneInterval?: number
+  autoPrune?: boolean
+
+  /**
+   * Use this value to "debounce" the pruning, i.e. prevent pruning on every insertion. Note that MemCache
+   * is always synchronous, so it's not an actual debounce – if `.insertOne() / .insertMany()` is called
+   * before the debounce time is over, pruning will only happen at the next insertion.
+   */
+  autoPruneInterval?: number
+
+  /**
+   * The key depth at which to prune the cache. By default, leaf nodes are pruned (implying a pruneDepth
+   * of `Infinity`). If set to a number, the cache will prune the entire subtree at that depth.
+   * 
+   * This value must be a non-negative integer. If set to `Infinity`, the cache will prune leaf entries
+   * individually. If set to `0`, the cache will clear itself completely if it goes over capacity. If
+   * set to `1`, the cache will prune all entries at the first level, i.e. if any of those overflows
+   * the capacity, it will prune the entire subtree of that entry.
+   * 
+   * Note: setting it to `0` is kind of useless.
+   */
+  pruneDepth?: number
 
   /**
    * A callback that is called when the cache is pruned. Use this to perhaps offload the pruned entries to
@@ -27,5 +46,7 @@ export interface MemCacheOptions<K, V> {
    * 
    * @param entries The pruned entries, including the approximate byte size of the value.
    */
-  pruned?: (entries: Array<[K, V, number]>) => void
+  pruned?: (entries: Array<[K | PrefixOf<K>, V, number]>) => void
 }
+
+export type PrefixOf<K extends any[]> = K extends [...infer Head, any] ? Head | PrefixOf<Head> : never
