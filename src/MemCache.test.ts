@@ -206,6 +206,75 @@ describe("MemCache", () => {
     
   })
 
+  describe("counts", () => {
+
+    let cache: MemCache<[string, number], number>
+
+    beforeEach(() => {
+      cache = new MemCache<[string, number], number>()
+    })
+
+    // Note: I've mocked object-sizeof to return the size of numbers as their value.
+
+    it("should report the number of items", () => {
+      cache.insertOne(['key1', 1], 40)
+      cache.insertOne(['key1', 2], 50)
+      cache.insertOne(['key2', 1], 60)
+      cache.insertOne(['key2', 2], 70)
+      expect(cache.count).toEqual(4)
+    })
+
+    it("should allow getting the count on a partial as well", () => {
+      cache.insertOne(['key1', 1], 40)
+      cache.insertOne(['key1', 2], 50)
+      cache.insertOne(['key2', 1], 60)
+      cache.insertOne(['key2', 2], 70)
+
+      expect(cache.partial(['key1'])?.count).toEqual(2)
+      expect(cache.partial(['key2'])?.count).toEqual(2)
+      expect(cache.partial(['key3'])?.count).toBeUndefined()
+    })
+
+    it("should return correctly handle inserting & overwriting a key", () => {
+      cache.insertOne(['key1', 1], 80)
+      cache.insertOne(['key1', 2], 100)
+      expect(cache.partial(['key1'])?.count).toEqual(2)
+      expect(cache.count).toEqual(2)
+
+      cache.insertOne(['key1', 1], 120, true)
+      expect(cache.partial(['key1'])?.count).toEqual(2)
+      expect(cache.count).toEqual(2)
+
+      cache.insertOne(['key1', 2], 140, false)
+      expect(cache.partial(['key1'])?.count).toEqual(2)
+      expect(cache.count).toEqual(2)
+    })
+
+    it("should correctly handle deletions", () => {
+      cache.insertMany([
+        [['key1', 1], 40],
+        [['key1', 2], 50],
+        [['key2', 1], 60],
+        [['key2', 2], 70],
+        [['key3', 1], 80]
+      ])
+      expect(cache.partial(['key1'])?.count).toEqual(2)
+      expect(cache.partial(['key2'])?.count).toEqual(2)
+      expect(cache.partial(['key3'])?.count).toEqual(1)
+      expect(cache.count).toEqual(5)
+
+      cache.deleteOne(['key1', 1])
+      expect(cache.partial(['key1'])?.count).toEqual(1)
+      expect(cache.partial(['key2'])?.count).toEqual(2)
+      expect(cache.partial(['key3'])?.count).toEqual(1)
+      expect(cache.count).toEqual(4)
+
+      cache.deleteOne(['key2'])
+      expect(cache.count).toEqual(2)
+    })
+
+  })
+
   describe("sizes", () => {
 
     let cache: MemCache<[string, number], number>

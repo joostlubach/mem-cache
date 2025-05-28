@@ -49,6 +49,10 @@ export interface MemCacheOptions<K extends [Primitive, ...Primitive[]], V> {
   pruned?: (entries: Array<[K | prefix<K>, V, number]>) => void
 }
 
+export type Node<K extends Primitive, V> = Branch<K, V> | Leaf<V>
+export type Branch<K extends Primitive, V> = [map: Map<K, Node<Primitive, V>>, atime: Date, size: number, count: number]
+export type Leaf<V> = [value: V, atime: Date, size: number]
+
 export type prefix<K extends any[]> = K extends [...infer Head, any] ? Head | prefix<Head> : never
 
 export type head1<K extends any> = K extends [...infer H, any] ? H : never

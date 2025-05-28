@@ -2,7 +2,20 @@ import sizeof from 'object-sizeof'
 import { byteSize, Primitive } from 'ytil'
 
 import { CachePartial } from './CachePartial'
-import { head1, head2, head3, MemCacheOptions, prefix, tail1, tail2, tail3 } from './types'
+import {
+  Branch,
+  head1,
+  head2,
+  head3,
+  Leaf,
+  MemCacheOptions,
+  Node,
+  prefix,
+  tail1,
+  tail2,
+  tail3,
+} from './types'
+import { isBranch, isLeaf } from './util'
 
 /**
  * A memory cache storage with nested keys with auto-pruning capabilities.
@@ -20,7 +33,7 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
     new Map(),
     new Date(),
     0,
-    false
+    0
   ]
 
   private rootPartial = new CachePartial<K, V>(this, [], this.root)
@@ -31,6 +44,10 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
   private lastPruneAt: Date = new Date()
 
   // #region Retrieval
+
+  public get count() {
+    return this.rootPartial.count
+  }
 
   public get(key: K, updateAccessTime: boolean = true) {
     return this.rootPartial.get(key, updateAccessTime)
@@ -60,7 +77,7 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
 
   public partial(key: any): CachePartial<Primitive[], any> | null {
     const node = this.rootPartial.node(this.root, key as Primitive[])
-    if (node == null || node[3]) { return null }
+    if (node == null || isLeaf(node)) { return null }
 
     return new CachePartial(this, key as Primitive[], node)
   }
@@ -104,32 +121,35 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
     return existing ?? value
   }
 
-  private insertImpl(branch: Branch<Primitive, V>, key: Primitive[], value: V, date: Date, replace: boolean): [number | null, number] {
-    if (key.length === 0) { return [null, 0] }
+  private insertImpl(branch: Branch<Primitive, V>, key: Primitive[], value: V, date: Date, replace: boolean): [number | null, number, boolean] {
+    if (key.length === 0) { return [null, 0, false] }
 
     const [head, ...tail] = key
     if (tail.length === 0) {
       const existing = branch[0].get(head) as Leaf<V> | undefined
-      if (!replace && existing != null) { return [null, 0] }
+      if (!replace && existing != null) { return [null, 0, false] }
 
       const size = sizeof(value)
       const diff = size - (existing?.[2] ?? 0)
-      branch[0].set(head, [value, date, size, true])
+      const inserted = existing == null
+      branch[0].set(head, [value, date, size])
       branch[1] = date
       branch[2] += diff
-      return [size, diff]
+      branch[3] += inserted ? 1 : 0
+      return [size, diff, inserted]
     }
 
     let child = branch[0].get(head) as Branch<Primitive, V> | undefined
     if (child == null) {
-      child = [new Map(), date, 0, false]
+      child = [new Map(), date, 0, 0]
       branch[0].set(head, child)
     }
 
-    const [size, diff] = this.insertImpl(child, tail, value, date, replace)
+    const [size, diff, inserted] = this.insertImpl(child, tail, value, date, replace)
     branch[1] = date
     branch[2] += diff
-    return [size, diff]
+    branch[3] += inserted ? 1 : 0
+    return [size, diff, inserted]
   }
 
   // #endregion
@@ -158,10 +178,9 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
       const entry = branch[0].get(head) as Leaf<V> | undefined
       if (entry == null) { return null }
 
-      const size = entry[2]
-
       branch[0].delete(head)
-      branch[2] -= size
+      branch[2] -= entry[2]
+      branch[3] -= (isBranch(entry) ? entry[3] : 1)
       return entry
     }
 
@@ -172,6 +191,7 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
     if (deleted == null) { return null }
 
     branch[2] -= deleted[2]
+    branch[3] -= (isBranch(deleted) ? deleted[3] : 1)
     return deleted      
   }
 
@@ -191,10 +211,10 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
     // Derive a flat list of keys / key prefixes with their access time.
     const flattened: Array<[K | prefix<K>, V, Date, number]> = []
     const flatten = (node: Node<Primitive, V>, prefix: Primitive[]): void => {
-      if (prefix.length >= pruneDepth || node[3]) {
+      if (prefix.length >= pruneDepth || isLeaf(node)) {
         const leaf = node as Leaf<V>
         flattened.push([prefix as K | prefix<K>, leaf[0], leaf[1], leaf[2]])
-      } else if (!node[3]) {
+      } else if (isBranch(node)) {
         for (const child of node[0]) {
           flatten(child[1], [...prefix, child[0]])
         }
@@ -245,7 +265,3 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
   // #endregion
 
 }
-
-export type Node<K extends Primitive, V> = Branch<K, V> | Leaf<V>
-export type Branch<K extends Primitive, V> = [map: Map<K, Node<Primitive, V>>, atime: Date, size: number, leaf: false]
-export type Leaf<V> = [value: V, atime: Date, size: number, leaf: true]

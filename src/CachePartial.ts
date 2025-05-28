@@ -1,7 +1,8 @@
 import { Primitive } from 'ytil'
 
-import { Branch, MemCache, Node } from './MemCache'
-import { prefix } from './types'
+import { MemCache } from './MemCache'
+import { Branch, Node, prefix } from './types'
+import { isLeaf } from './util'
 
 export class CachePartial<K extends Primitive[], V> {
 
@@ -23,7 +24,7 @@ export class CachePartial<K extends Primitive[], V> {
 
   public get(key: K, updateAccessTime: boolean = true): V | undefined {
     const node = this.getImpl(this.root, key, updateAccessTime)
-    if (node == null || !node[3]) { return undefined }
+    if (node == null || !isLeaf(node)) { return undefined }
 
     return node[0]
   }
@@ -38,6 +39,10 @@ export class CachePartial<K extends Primitive[], V> {
     const node = this.node(this.root, [...this.prefix, ...key] as any)
     if (node == null) { return undefined }
     return node[1]
+  }
+
+  public get count() {
+    return this.root[3]
   }
 
   private getImpl(node: Node<Primitive, V>, key: Primitive[], updateAccessTime: boolean): Node<K[0], V> | undefined {
@@ -116,7 +121,7 @@ export class CachePartial<K extends Primitive[], V> {
 
   public *entries(): Generator<[K, V, number]> {
     for (const [key, node] of this.nodes()) {
-      if (node[3]) {
+      if (isLeaf(node)) {
         yield [key, node[0], node[2]]
       }
     }
@@ -124,7 +129,7 @@ export class CachePartial<K extends Primitive[], V> {
 
   public *nodes(): Generator<[K, Node<Primitive, V>]> {
     function *iterNode(node: Node<Primitive, V>, prefix: Primitive[] = []): Generator<[K, Node<Primitive, V>]> {
-      if (node[3]) {
+      if (isLeaf(node)) {
         yield [prefix as K, node];
       } else {
         for (const [key, child] of node[0]) {
