@@ -1,5 +1,5 @@
-import sizeof from 'object-sizeof'
-import { byteSize, Primitive } from 'ytil'
+import * as object_sizeof from 'object-sizeof'
+import { byteSize, isFunction, Primitive } from 'ytil'
 
 import { CachePartial } from './CachePartial'
 import {
@@ -16,6 +16,10 @@ import {
   tail3,
 } from './types'
 import { isBranch, isLeaf } from './util'
+
+// object-sizeof declares a default export, but also exports the function directly - this causes it to work
+// in TS but not when compiled to JS. this is a check to ensure workability in both cases.
+const sizeof: typeof object_sizeof.default = isFunction(object_sizeof) ? object_sizeof : object_sizeof.default 
 
 /**
  * A memory cache storage with nested keys with auto-pruning capabilities.
