@@ -46,7 +46,16 @@ export interface MemCacheOptions<K extends [Primitive, ...Primitive[]], V> {
    * 
    * @param entries The pruned entries, including the approximate byte size of the value.
    */
-  pruned?: (entries: Array<[K | PrefixOf<K>, V, number]>) => void
+  pruned?: (entries: Array<[K | prefix<K>, V, number]>) => void
 }
 
-export type PrefixOf<K extends any[]> = K extends [...infer Head, any] ? Head | PrefixOf<Head> : never
+export type prefix<K extends any[]> = K extends [...infer Head, any] ? Head | prefix<Head> : never
+
+export type head1<K extends any> = K extends [...infer H, any] ? H : never
+export type tail1<K extends any> = K extends [...any[], infer T] ? [T] : never
+
+export type head2<K extends any> = K extends [...infer H, any, any] ? H : never
+export type tail2<K extends any> = K extends [...any[], infer T1, infer T2] ? [T1, T2] : never
+
+export type head3<K extends any> = K extends [...infer H, any, any, any] ? H : never
+export type tail3<K extends any> = K extends [...any[], infer T1, infer T2, infer T3] ? [T1, T2, T3] : never

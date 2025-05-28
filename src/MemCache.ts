@@ -1,7 +1,8 @@
 import sizeof from 'object-sizeof'
 import { byteSize, Primitive } from 'ytil'
 
-import { MemCacheOptions, PrefixOf } from './types'
+import { CachePartial } from './CachePartial'
+import { head1, head2, head3, MemCacheOptions, prefix, tail1, tail2, tail3 } from './types'
 
 /**
  * A memory cache storage with nested keys with auto-pruning capabilities.
@@ -22,65 +23,54 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
     false
   ]
 
+  private rootPartial = new CachePartial<K, V>(this, [], this.root)
+
   public get size() { return this.root[2] }
   public readonly capacity: number | null
   
-
   private lastPruneAt: Date = new Date()
 
   // #region Retrieval
 
   public get(key: K, updateAccessTime: boolean = true) {
-    return this.getImpl(this.root, key, updateAccessTime)
+    return this.rootPartial.get(key, updateAccessTime)
   }
 
-  public sizeof(key: K | PrefixOf<K>) {
-    const node = this.getNode(this.root, key as Primitive[])
-    if (node == null) { return null }
-    return node[2]
+  public sizeof(key: K | prefix<K>) {
+    return this.rootPartial.sizeof(key)
   }
 
-  public atime(key: K | PrefixOf<K>) {
-    const node = this.getNode(this.root, key as Primitive[])
-    if (node == null) { return null }
-    return node[1]
+  public atime(key: K | prefix<K>) {
+    return this.rootPartial.atime(key)
   }
 
-  private getImpl(node: Node<Primitive, V>, key: Primitive[], updateAccessTime: boolean): V | null {
-    // Update access time.
-    if (updateAccessTime) {
-      node[1] = new Date()
-    }
+  // #endregion
 
-    if (key.length === 0) {
-      return (node as Leaf<V>)[0]
-    } else {
-      const [head, ...tail] = key
-      const child = (node as Branch<Primitive, V>)[0].get(head)
-      if (child == null) { return null }
-      
-      return this.getImpl(child, tail, updateAccessTime)
-    }
-  }
+  // #region Partials
 
-  private getNode(node: Node<Primitive, V>, key: Primitive[]): Node<Primitive, V> | null {
-    if (key.length === 0) {
-      return node
-    } else {
-      const [head, ...tail] = key
-      const child = (node as Branch<Primitive, V>)[0].get(head)
-      if (child == null) { return null }
-      return this.getNode(child, tail)
-    }
+  // We add some overloads to allow for statically typed partial access until a certain depth. Typically, keys
+  // are not longer than 3-4 elements, so this should be sufficient.
 
+  public partial(key: head1<K>): CachePartial<tail1<K> & Primitive[], V> | null
+  public partial(key: head2<K>): CachePartial<tail2<K> & Primitive[], V> | null
+  public partial(key: head3<K>): CachePartial<tail3<K> & Primitive[], V> | null
+
+  // Catch all. Values are always a map (of a map (of a map...)) of values.
+  public partial(key: prefix<K>): CachePartial<Primitive[], any> | null
+
+  public partial(key: any): CachePartial<Primitive[], any> | null {
+    const node = this.rootPartial.node(this.root, key as Primitive[])
+    if (node == null || node[3]) { return null }
+
+    return new CachePartial(this, key as Primitive[], node)
   }
 
   // #endregion
 
   // #region Insertion
 
-  public insertOne(key: K, value: V, replace: false): number | null
-  public insertOne(key: K, value: V, replace?: true): number
+  public insertOne(key: K, value: V, replace?: true | undefined): number
+  public insertOne(key: K, value: V, replace: boolean): number | null
   public insertOne(key: K, value: V, replace: boolean = true): number | null {
     try {
       const [size] = this.insertImpl(this.root, key, value, new Date(), replace)
@@ -103,6 +93,15 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
       this.prune()
     }
     return totalSize
+  }
+
+  public ensure(key: K, value: V): V {
+    const existing = this.get(key, false)
+    if (existing == null) {
+      this.insertOne(key, value, false)
+    }
+
+    return existing ?? value
   }
 
   private insertImpl(branch: Branch<Primitive, V>, key: Primitive[], value: V, date: Date, replace: boolean): [number | null, number] {
@@ -140,7 +139,7 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
   /**
    * Deletes a single entry from the cache and returns the value and its size.
    */
-  public deleteOne(key: K | PrefixOf<K>) {
+  public deleteOne(key: K | prefix<K>) {
     this.deleteImpl(this.root, key as Primitive[])
   }
 
@@ -190,11 +189,11 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
     const {pruneDepth = Infinity} = this.options
 
     // Derive a flat list of keys / key prefixes with their access time.
-    const flattened: Array<[K | PrefixOf<K>, V, Date, number]> = []
+    const flattened: Array<[K | prefix<K>, V, Date, number]> = []
     const flatten = (node: Node<Primitive, V>, prefix: Primitive[]): void => {
       if (prefix.length >= pruneDepth || node[3]) {
         const leaf = node as Leaf<V>
-        flattened.push([prefix as K | PrefixOf<K>, leaf[0], leaf[1], leaf[2]])
+        flattened.push([prefix as K | prefix<K>, leaf[0], leaf[1], leaf[2]])
       } else if (!node[3]) {
         for (const child of node[0]) {
           flatten(child[1], [...prefix, child[0]])
@@ -206,7 +205,7 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
     // Sort the access times by the least recent first.
     flattened.sort((a, b) => a[2].getTime() - b[2].getTime())
 
-    const pruned: Array<[K | PrefixOf<K>, V, number]> = []
+    const pruned: Array<[K | prefix<K>, V, number]> = []
 
     // Prune entries until the size is below capacity.
     for (const [key, value, , size] of flattened) {
@@ -234,40 +233,11 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
 
   // #region Iteration
 
-  public *keys() {
-    for (const entry of this.entries()) {
-      yield entry[0]
-    }
-  }
-
-  public *values() {
-    for (const entry of this.entries()) {
-      yield entry[2]
-    }
-  }
-
-  public *entries(): Generator<[K, V, number]> {
-    for (const [key, node] of this.nodes()) {
-      if (node[3]) {
-        yield [key, node[0], node[2]]
-      }
-    }
-  }
-
-  public *nodes(): Generator<[K, Node<Primitive, V>]> {
-    function *iterNode(node: Node<Primitive, V>, prefix: Primitive[] = []): Generator<[K, Node<Primitive, V>]> {
-      if (node[3]) {
-        yield [prefix as K, node];
-      } else {
-        for (const [key, child] of node[0]) {
-          yield *iterNode(child, [...prefix, key]);
-        }
-      }
-    }
-
-    yield *iterNode(this.root)
-  }
-
+  public keys() { return this.rootPartial.keys() }
+  public values() { return this.rootPartial.values() }
+  public entries() { return this.rootPartial.entries() }
+  public nodes() { return this.rootPartial.nodes() }
+  
   public [Symbol.iterator]() {
     return this.entries()
   }
@@ -276,6 +246,6 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
 
 }
 
-type Node<K extends Primitive, V> = Branch<K, V> | Leaf<V>
-type Branch<K extends Primitive, V> = [map: Map<K, Node<Primitive, V>>, atime: Date, size: number, leaf: false]
-type Leaf<V> = [value: V, atime: Date, size: number, leaf: true]
+export type Node<K extends Primitive, V> = Branch<K, V> | Leaf<V>
+export type Branch<K extends Primitive, V> = [map: Map<K, Node<Primitive, V>>, atime: Date, size: number, leaf: false]
+export type Leaf<V> = [value: V, atime: Date, size: number, leaf: true]

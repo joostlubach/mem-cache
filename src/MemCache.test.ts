@@ -1,3 +1,4 @@
+import { CachePartial } from './CachePartial'
 import { MemCache } from './MemCache'
 
 jest.mock('object-sizeof', () => jest.fn(obj => {
@@ -27,7 +28,7 @@ describe("MemCache", () => {
       expect(cache.get(['key1'])).toEqual('value1')
       expect(cache.get(['key2'])).toEqual('value2')
       expect(cache.get(['key3'])).toEqual('value3')
-      expect(cache.get(['key4'])).toBeNull()
+      expect(cache.get(['key4'])).toBeUndefined()
     })
 
     it("should allow nested access", () => {
@@ -43,8 +44,8 @@ describe("MemCache", () => {
       expect(cache.get(['key1', 'subkey2'])).toEqual('value2')
       expect(cache.get(['key2', 'subkey1'])).toEqual('value3')
       expect(cache.get(['key2', 'subkey2'])).toEqual('value4')
-      expect(cache.get(['key3', 'subkey1'])).toBeNull()
-      expect(cache.get(['key1', 'subkey3'])).toBeNull()
+      expect(cache.get(['key3', 'subkey1'])).toBeUndefined()
+      expect(cache.get(['key1', 'subkey3'])).toBeUndefined()
     })
 
     it("should by default overwrite a value", () => {
@@ -88,6 +89,72 @@ describe("MemCache", () => {
 
   })
 
+  describe("ensure", () => {
+
+    it("should insert a value and return it if it does not exist", () => {
+      const cache = new MemCache<[string], string>()
+      cache.ensure(['key1'], 'value1')
+      expect(cache.get(['key1'])).toEqual('value1')
+      cache.ensure(['key1'], 'value2')
+      expect(cache.get(['key1'])).toEqual('value1')
+    })
+
+    it("should not overwrite an existing value but return the existing value", () => {
+      const cache = new MemCache<[string], string>()
+      cache.insertOne(['key1'], 'value1')
+      cache.ensure(['key1'], 'value2')
+      expect(cache.get(['key1'])).toEqual('value1')
+    })
+
+  })
+
+  describe("partials", () => {
+
+    let cache: MemCache<[string, number, boolean], string>
+
+    beforeEach(() => {
+      cache = new MemCache<[string, number, boolean], string>()
+      cache.insertMany([
+        [['key1', 1, true], 'value1.1'],
+        [['key1', 2, true], 'value1.2'],
+        [['key1', 2, false], '!value1.2'],
+        [['key2', 1, true], 'value2.1'],
+        [['key2', 1, false], '!value2.1'],
+        [['key2', 2, false], '!value2.2']
+      ])
+    })
+
+    it("should create a partial map for a given key", () => {
+      const partial = cache.partial(['key1', 2])
+      expect(partial).toBeInstanceOf(CachePartial)
+      expect(partial?.get([true])).toEqual('value1.2')
+      expect(partial?.get([false])).toEqual('!value1.2')
+    })
+
+    it("should create a partial map at any depth below the final level", () => {
+      const partial = cache.partial(['key1'])
+      expect(partial).toBeInstanceOf(CachePartial)
+      expect(partial?.get([1, true])).toEqual('value1.1')
+      expect(partial?.get([1, false])).toBeUndefined()
+      expect(partial?.get([2, true])).toEqual('value1.2')
+      expect(partial?.get([2, false])).toEqual('!value1.2')
+    })
+
+    it("should get an interface identical to the cache itself if an empty array is specified", () => {
+      const partial = cache.partial([])
+      expect(partial).toBeInstanceOf(CachePartial)
+      expect(partial?.get(['key1', 1, true])).toEqual('value1.1')
+      expect(partial?.get(['key1', 1, false])).toBeUndefined()
+      expect(partial?.get(['key1', 2, true])).toEqual('value1.2')
+      expect(partial?.get(['key1', 2, false])).toEqual('!value1.2')
+      expect(partial?.get(['key2', 1, true])).toEqual('value2.1')
+      expect(partial?.get(['key2', 1, false])).toEqual('!value2.1')
+      expect(partial?.get(['key2', 2, true])).toBeUndefined()
+      expect(partial?.get(['key2', 2, false])).toEqual('!value2.2')
+    })
+
+  })
+
   describe("deletion", () => {
 
     let cache: MemCache<[string, string], string>
@@ -104,7 +171,7 @@ describe("MemCache", () => {
 
     it("should delete a single item", () => {
       cache.deleteOne(['key1', 'subkey1'])
-      expect(cache.get(['key1', 'subkey1'])).toBeNull()
+      expect(cache.get(['key1', 'subkey1'])).toBeUndefined()
       expect(cache.get(['key1', 'subkey2'])).toEqual('value1.2')
       expect(cache.get(['key2', 'subkey1'])).toEqual('value2.1')
       expect(cache.get(['key2', 'subkey2'])).toEqual('value2.2')
@@ -112,8 +179,8 @@ describe("MemCache", () => {
 
     it("should delete a prefix and all its children", () => {
       cache.deleteOne(['key1'])
-      expect(cache.get(['key1', 'subkey1'])).toBeNull()
-      expect(cache.get(['key1', 'subkey2'])).toBeNull()
+      expect(cache.get(['key1', 'subkey1'])).toBeUndefined()
+      expect(cache.get(['key1', 'subkey2'])).toBeUndefined()
       expect(cache.get(['key2', 'subkey1'])).toEqual('value2.1')
       expect(cache.get(['key2', 'subkey2'])).toEqual('value2.2')
     })
@@ -123,18 +190,18 @@ describe("MemCache", () => {
         ['key1', 'subkey1'],
         ['key2', 'subkey2']
       ])
-      expect(cache.get(['key1', 'subkey1'])).toBeNull()
+      expect(cache.get(['key1', 'subkey1'])).toBeUndefined()
       expect(cache.get(['key1', 'subkey2'])).toEqual('value1.2')
       expect(cache.get(['key2', 'subkey1'])).toEqual('value2.1')
-      expect(cache.get(['key2', 'subkey2'])).toBeNull()
+      expect(cache.get(['key2', 'subkey2'])).toBeUndefined()
     })
 
     it("should allow clearing the entire cache", () => {
       cache.clear()
-      expect(cache.get(['key1', 'subkey1'])).toBeNull()
-      expect(cache.get(['key1', 'subkey2'])).toBeNull()
-      expect(cache.get(['key2', 'subkey1'])).toBeNull()
-      expect(cache.get(['key2', 'subkey2'])).toBeNull()
+      expect(cache.get(['key1', 'subkey1'])).toBeUndefined()
+      expect(cache.get(['key1', 'subkey2'])).toBeUndefined()
+      expect(cache.get(['key2', 'subkey1'])).toBeUndefined()
+      expect(cache.get(['key2', 'subkey2'])).toBeUndefined()
     })
     
   })
@@ -174,8 +241,8 @@ describe("MemCache", () => {
       expect(cache.sizeof(['key2'])).toEqual(60 + 70)
       expect(cache.sizeof(['key2', 1])).toEqual(60)
       expect(cache.sizeof(['key2', 2])).toEqual(70)
-      expect(cache.sizeof(['key3'])).toBeNull()
-      expect(cache.sizeof(['key3', 1])).toBeNull()
+      expect(cache.sizeof(['key3'])).toBeUndefined()
+      expect(cache.sizeof(['key3', 1])).toBeUndefined()
     })
 
     it("should return correctly handle inserting & overwriting a key", () => {
@@ -214,15 +281,15 @@ describe("MemCache", () => {
       expect(cache.size).toEqual(40 + 50 + 60 + 70 + 80)
 
       cache.deleteOne(['key1', 1])
-      expect(cache.sizeof(['key1', 1])).toBeNull()
+      expect(cache.sizeof(['key1', 1])).toBeUndefined()
       expect(cache.sizeof(['key1'])).toEqual(50)
       expect(cache.sizeof(['key2'])).toEqual(130)
       expect(cache.size).toEqual(50 + 130 + 80)
 
       cache.deleteOne(['key2'])
-      expect(cache.sizeof(['key2', 1])).toBeNull()
-      expect(cache.sizeof(['key2', 2])).toBeNull()
-      expect(cache.sizeof(['key2'])).toBeNull()
+      expect(cache.sizeof(['key2', 1])).toBeUndefined()
+      expect(cache.sizeof(['key2', 2])).toBeUndefined()
+      expect(cache.sizeof(['key2'])).toBeUndefined()
       expect(cache.size).toEqual(50 + 80)
     })
 
