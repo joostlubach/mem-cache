@@ -115,7 +115,7 @@ export class CachePartial<K extends Primitive[], V> {
 
   public *values() {
     for (const entry of this.entries()) {
-      yield entry[2]
+      yield entry[1]
     }
   }
 

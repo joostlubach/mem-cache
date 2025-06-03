@@ -257,10 +257,24 @@ export class MemCache<K extends [Primitive, ...Primitive[]], V> {
 
   // #region Iteration
 
-  public keys() { return this.rootPartial.keys() }
-  public values() { return this.rootPartial.values() }
-  public entries() { return this.rootPartial.entries() }
-  public nodes() { return this.rootPartial.nodes() }
+  public *keys(): Generator<K> {
+    for (const entry of this.entries()) {
+      yield entry[0]
+    }
+  }
+
+  public *values(): Generator<V> {
+    for (const entry of this.entries()) {
+      yield entry[1]
+    }
+  }
+  
+  public *entries(): Generator<readonly [K, V]> {
+    for (const [key, node] of this.rootPartial.nodes()) {
+      if (!isLeaf(node)) { continue }
+      yield [key, node[0]]
+    }
+  }
   
   public [Symbol.iterator]() {
     return this.entries()
